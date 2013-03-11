@@ -1,10 +1,11 @@
 define [
   "use!underscore"
   "use!sockjs"
-  "use!backbone"
-], (_, SockJS, Backbone) ->
+], (_, SockJS) ->
 
-  # Клиент для Ecomet-сервера
+  #
+  # Client for Ecomet server
+  #
   class Ecomet
 
     _options:
@@ -18,6 +19,7 @@ define [
     _subsBuffer:       []
     _bufferTimeout:    null
     _allSubscriptions: []
+    _eventHandlers:    {}
     _alreadyAuth:      null
     _socket:           null
 
@@ -33,12 +35,21 @@ define [
       @_allSubscriptions.push _subs
       @_subsBuffer.push _subs
 
-      @.on 'ecomet.message.' + routeKey, callback
+      @on 'ecomet.message.' + routeKey, callback
       @_checkSubsBuffer()
       @
 
+    on: (name, callback) ->
+      return unless _.isFunction(callback)
+      @_eventHandlers[name] ?= {}
+      @_eventHandlers[name][callback] = callback
+      @
 
-    # PRIVATE #
+    trigger: (name, options) ->
+      if @_eventHandlers[name]
+        for key, callback of @_eventHandlers[name]
+          callback(options)
+      @
 
     _checkSubsBuffer: ->
       return if @_bufferTimeout or not @_subsBuffer
@@ -71,9 +82,6 @@ define [
       @_options[name]
 
 
-  _.extend Ecomet.prototype, Backbone.Events
-
-
   class SockJSAdapter
 
     _client:            null
@@ -90,34 +98,29 @@ define [
       _host    = @ecomet._opt 'host'
       @_client = new SockJS (if _host.match(/https?:\/\//) then '' else window.location.protocol + '//') + _host + '/ecomet', null, { devel: true, debug: true }
 
-
-      # подключение
+      # connecting
       @_client.onopen = =>
         @_checkSendBuffer()
         @ecomet.trigger 'ecomet.connect'
 
-        # при успешном длительном коннекте сбрасываем счетчик ошибок
+        # clear error count if succesfully connected
         @_disconnectTimeout = setTimeout ( => @_disconnectCnt = 0), 10000
 
-
-      # получение сообщения
+      # receive new message
       @_client.onmessage = (event) =>
         _data = JSON.parse event.data
 
         @ecomet.trigger 'ecomet.message.' + _data.event, _data.message
 
-
-      # отключение
+      # disconnect
       @_client.onclose = =>
         @ecomet.trigger 'ecomet.disconnect'
         @_client = null
         @_reconnect()
 
-
     send: (message) ->
       @_sendBuffer.push message
       @_checkSendBuffer()
-
 
     _reconnect: ->
       # если это не перманентная ошибка — переподключаемся и сново подписываемся на все эвенты
@@ -145,8 +148,7 @@ define [
       @_sendBuffer = []
 
       for msg in _messages
-        @_client.send JSON.stringify msg
+        @_client.send JSON.stringify(msg)
 
 
   Ecomet
-
